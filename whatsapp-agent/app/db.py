@@ -143,7 +143,7 @@ async def get_recent_messages(
             await cur.execute(
                 """
                 SELECT role, content FROM (
-                    SELECT role, content, created_at
+                    SELECT id, role, content, created_at
                     FROM messages
                     WHERE customer_id = %s
                     ORDER BY created_at DESC, id DESC
