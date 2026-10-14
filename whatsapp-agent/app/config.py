@@ -27,7 +27,7 @@ class Settings(BaseSettings):
 
     admin_token: str = Field(default="admin_secret", description="Bearer token for admin API endpoints")
 
-    business_name: str = Field(default="Al-Madina Store", description="Business name for prompt context")
+    business_name: str = Field(default="Al-Madina Mobile Store", description="Business name for prompt context")
     env: str = Field(default="development", description="Environment mode (development/production/testing)")
     log_level: str = Field(default="INFO", description="Logging level")
 
