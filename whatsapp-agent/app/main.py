@@ -12,6 +12,13 @@ from app.agent import run_agent
 from app.whatsapp import verify_signature, parse_incoming, mark_as_read, send_text
 from app.handoff import pause_bot_for_customer, resume_bot_for_customer
 
+# settings.log_level was previously defined but never applied, so the app's own
+# INFO logs were swallowed by the root logger's default WARNING level.
+logging.basicConfig(
+    level=getattr(logging, settings.log_level.upper(), logging.INFO),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+
 logger = logging.getLogger(__name__)
 
 # Simple in-memory rate limiting tracker: {phone: [timestamp1, timestamp2]}
@@ -80,12 +87,24 @@ async def verify_webhook(request: Request):
 
 
 async def process_incoming_message(payload: Dict[str, Any]):
-    """Background task handler for incoming WhatsApp message processing."""
+    """
+    Background task entry point. Never raises: a background task that blows up
+    would silently drop the customer's message with no visible error.
+    """
+    try:
+        await _handle_incoming_message(payload)
+    except Exception:
+        logger.exception("Unhandled error while processing incoming WhatsApp message")
+
+
+async def _handle_incoming_message(payload: Dict[str, Any]):
+    """Incoming WhatsApp message processing."""
     parsed = parse_incoming(payload)
     if not parsed:
         return
 
     phone, name, wa_message_id, msg_type, text = parsed
+    logger.info("Incoming '%s' message %s from %s", msg_type, wa_message_id, phone)
 
     # 1. Rate limiting check
     if is_rate_limited(phone):
@@ -122,8 +141,11 @@ async def process_incoming_message(payload: Dict[str, Any]):
     reply = await run_agent(customer, text, wa_message_id=wa_message_id)
 
     # 7. Send reply back to user
-    if reply:
-        await send_text(phone, reply)
+    if not reply:
+        logger.info("Agent produced no reply for %s. Nothing sent.", phone)
+        return
+    if not await send_text(phone, reply):
+        logger.error("Agent reply could not be delivered to %s", phone)
 
 
 @app.post("/webhook")
@@ -142,6 +164,7 @@ async def webhook_handler(request: Request):
         raise HTTPException(status_code=400, detail="Invalid JSON body")
 
     # Return 200 OK immediately to Meta, process in BackgroundTask
+    logger.info("Webhook POST accepted (%d bytes)", len(raw_body))
     return JSONResponse(
         status_code=200,
         content={"status": "received"},
