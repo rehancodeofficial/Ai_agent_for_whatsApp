@@ -30,5 +30,5 @@ USER appuser
 
 EXPOSE 8000
 
-# Run uvicorn server with 2 worker processes
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+# Run uvicorn server binding to $PORT (assigned by Render/Koyeb) or fallback to 8000
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 2"]

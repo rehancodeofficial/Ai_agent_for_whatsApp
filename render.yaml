@@ -1,0 +1,38 @@
+services:
+  - type: web
+    name: whatsapp-ai-agent
+    runtime: docker
+    dockerfilePath: ./whatsapp-agent/Dockerfile
+    dockerContext: ./whatsapp-agent
+    plan: free
+    region: oregon
+    healthCheckPath: /health
+    envVars:
+      - key: ENV
+        value: production
+      - key: GEMINI_MODEL
+        value: gemini-2.0-flash
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: WA_TOKEN
+        sync: false
+      - key: WA_PHONE_NUMBER_ID
+        sync: false
+      - key: WA_VERIFY_TOKEN
+        sync: false
+      - key: WA_APP_SECRET
+        sync: false
+      - key: STAFF_ALERT_PHONE
+        sync: false
+      - key: ADMIN_TOKEN
+        sync: false
+      - key: ODOO_URL
+        value: http://localhost:8069
+      - key: ODOO_DB
+        value: odoo
+      - key: ODOO_USER
+        value: admin
+      - key: ODOO_API_KEY
+        sync: false
