@@ -1,0 +1,24 @@
+# Secrets must never be baked into an image layer; compose passes them via env_file.
+.env
+.env.*
+!.env.example
+
+# Host virtualenvs: huge, and built for the host's platform, not the image's.
+.venv/
+venv/
+ENV/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+.git/
+.gitignore
+*.log
+.DS_Store
+
+tests/
+scripts/
+compare_results.csv

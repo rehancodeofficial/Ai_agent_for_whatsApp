@@ -1,20 +1,4 @@
-version: '3.8'
-
 services:
-  postgres:
-    image: postgres:15-alpine
-    container_name: whatsapp_agent_db
-    restart: always
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: whatsapp_agent
-    ports:
-      - "5433:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql
-
   web:
     build: .
     container_name: whatsapp_agent_app
@@ -24,9 +8,15 @@ services:
     env_file:
       - .env
     environment:
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/whatsapp_agent
-    depends_on:
-      - postgres
-
-volumes:
-  pgdata:
+      # Inside a container "localhost" is the container itself, so the host's
+      # Postgres is reached through host.docker.internal. Keep the credentials
+      # in .env (this file is tracked by git), as DOCKER_DATABASE_URL.
+      - DATABASE_URL=${DOCKER_DATABASE_URL:?set DOCKER_DATABASE_URL in .env}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
