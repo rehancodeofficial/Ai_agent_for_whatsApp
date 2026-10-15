@@ -9,7 +9,15 @@ from fastapi.responses import PlainTextResponse, JSONResponse
 from app.config import settings
 from app import db
 from app.agent import run_agent
-from app.whatsapp import verify_signature, parse_incoming, mark_as_read, send_text
+from app.whatsapp import (
+    verify_signature,
+    parse_incoming,
+    parse_media,
+    download_media,
+    is_supported_media_mime,
+    mark_as_read,
+    send_text,
+)
 from app.handoff import pause_bot_for_customer, resume_bot_for_customer
 
 # settings.log_level was previously defined but never applied, so the app's own
@@ -121,24 +129,51 @@ async def _handle_incoming_message(payload: Dict[str, Any]):
         logger.info("Bot is disabled for customer %s (%s). Message ignored.", customer_id, phone)
         return
 
-    # 4. Handle non-text messages
+    # 4. Handle media messages (images, voice notes, ...) and unsupported types
+    media: Optional[Dict[str, Any]] = None
     if msg_type != "text" and not (msg_type == "interactive" and text):
-        logger.info("Received non-text message (%s) from %s", msg_type, phone)
-        await db.save_message(customer_id, "user", f"[{msg_type} message]", wa_message_id=wa_message_id)
-        non_text_reply = (
-            "Aap ka shukriya! Filhal hum sirf text messages process kar sakte hain. "
-            "Bara-e-karam apna sawal text mein likh kar bhejiye."
-        )
-        await send_text(phone, non_text_reply)
-        await db.save_message(customer_id, "assistant", non_text_reply)
-        return
+        media_info = parse_media(payload)
+
+        if not media_info or not is_supported_media_mime(media_info["mime_type"]):
+            logger.info("Received unsupported message type (%s) from %s", msg_type, phone)
+            await db.save_message(customer_id, "user", f"[{msg_type} message]", wa_message_id=wa_message_id)
+            unsupported_reply = (
+                "Aap ka shukriya! Is tarah ki file hum filhal parh nahi sakte. "
+                "Bara-e-karam apna sawal text, tasveer ya voice note mein bhejiye."
+            )
+            await send_text(phone, unsupported_reply)
+            await db.save_message(customer_id, "assistant", unsupported_reply)
+            return
+
+        downloaded = await download_media(media_info["media_id"])
+        if not downloaded:
+            logger.error("Could not download %s media from %s", msg_type, phone)
+            await db.save_message(customer_id, "user", f"[{msg_type} message]", wa_message_id=wa_message_id)
+            failed_reply = (
+                "Maazrat, aap ki bheji hui file download nahi ho saki. "
+                "Bara-e-karam dobara bhejiye ya apna sawal text mein likh dijiye."
+            )
+            await send_text(phone, failed_reply)
+            await db.save_message(customer_id, "assistant", failed_reply)
+            return
+
+        data, mime_type = downloaded
+        media = {
+            "data": data,
+            "mime_type": mime_type or media_info["mime_type"],
+            "kind": media_info["kind"],
+            "caption": media_info["caption"],
+        }
+        # Saved to the DB as a text placeholder; the bytes go straight to the LLM.
+        text = media_info["caption"] or f"[{msg_type} message]"
+        logger.info("Processing %s media (%s) from %s", msg_type, media["mime_type"], phone)
 
     # 5. Mark message as read
     if wa_message_id:
         await mark_as_read(wa_message_id)
 
     # 6. Execute Claude AI Agent loop
-    reply = await run_agent(customer, text, wa_message_id=wa_message_id)
+    reply = await run_agent(customer, text, wa_message_id=wa_message_id, media=media)
 
     # 7. Send reply back to user
     if not reply:

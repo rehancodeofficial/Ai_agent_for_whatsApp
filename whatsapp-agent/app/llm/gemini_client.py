@@ -133,11 +133,62 @@ class GeminiLLMClient(LLMClient):
                 )
                 contents.append(types.Content(role="user", parts=[part]))
 
-            # 4. Standard User message
+            # 4. Standard User message (text, or a list of text/media parts)
             elif role == "user":
-                contents.append(types.Content(role="user", parts=[types.Part.from_text(text=str(content or ""))]))
+                contents.append(types.Content(role="user", parts=self._user_parts(content)))
 
         return contents
+
+    def _user_parts(self, content: Any) -> List[types.Part]:
+        """
+        Build the parts of a user message. `content` is either a plain string or
+        a list of parts: {"type": "text", "text": ...} and
+        {"type": "media", "mime_type": ..., "data": <bytes>}.
+        """
+        if not isinstance(content, list):
+            return [types.Part.from_text(text=str(content or ""))]
+
+        parts: List[types.Part] = []
+        for item in content:
+            if not isinstance(item, dict):
+                parts.append(types.Part.from_text(text=str(item)))
+                continue
+
+            if item.get("type") == "media" and item.get("data"):
+                parts.append(
+                    types.Part.from_bytes(
+                        data=item["data"],
+                        mime_type=item.get("mime_type") or "application/octet-stream",
+                    )
+                )
+            elif item.get("text"):
+                parts.append(types.Part.from_text(text=str(item["text"])))
+
+        return parts or [types.Part.from_text(text="")]
+
+    def _build_config(
+        self,
+        system: str,
+        gemini_tools: Optional[List[types.Tool]],
+        max_tokens: int,
+        with_thinking: bool = True,
+    ) -> types.GenerateContentConfig:
+        """
+        Build the request config. Thinking tokens come out of max_output_tokens,
+        so on a thinking model an unbounded budget can leave nothing for the
+        visible answer and the reply arrives cut off mid-sentence.
+        """
+        kwargs: Dict[str, Any] = {
+            "system_instruction": system if system else None,
+            "tools": gemini_tools,
+            "max_output_tokens": max_tokens,
+            "temperature": 0.3,
+        }
+        if with_thinking and settings.gemini_thinking_budget >= 0:
+            kwargs["thinking_config"] = types.ThinkingConfig(
+                thinking_budget=settings.gemini_thinking_budget
+            )
+        return types.GenerateContentConfig(**kwargs)
 
     async def chat(
         self,
@@ -151,19 +202,23 @@ class GeminiLLMClient(LLMClient):
             gemini_tools = self._convert_tools(tools)
             contents = self._convert_messages(messages)
 
-            config = types.GenerateContentConfig(
-                system_instruction=system if system else None,
-                tools=gemini_tools,
-                max_output_tokens=max_tokens,
-                temperature=0.3,
-            )
-
-            # Call Gemini async API
-            response = await self.client.aio.models.generate_content(
-                model=self.model,
-                contents=contents,
-                config=config,
-            )
+            # Call Gemini async API. Models without thinking support reject
+            # thinking_config outright, so fall back to a plain request.
+            try:
+                response = await self.client.aio.models.generate_content(
+                    model=self.model,
+                    contents=contents,
+                    config=self._build_config(system, gemini_tools, max_tokens),
+                )
+            except Exception as e:
+                if "thinking" not in str(e).lower():
+                    raise
+                logger.warning("Model %s rejected thinking_config (%s). Retrying without it.", self.model, e)
+                response = await self.client.aio.models.generate_content(
+                    model=self.model,
+                    contents=contents,
+                    config=self._build_config(system, gemini_tools, max_tokens, with_thinking=False),
+                )
 
             text_output: Optional[str] = None
             tool_calls_output: List[Dict[str, Any]] = []
@@ -187,7 +242,11 @@ class GeminiLLMClient(LLMClient):
             usage_dict = {"input_tokens": 0, "output_tokens": 0}
             if hasattr(response, "usage_metadata") and response.usage_metadata:
                 usage_dict["input_tokens"] = getattr(response.usage_metadata, "prompt_token_count", 0) or 0
-                usage_dict["output_tokens"] = getattr(response.usage_metadata, "candidates_token_count", 0) or 0
+                # Thinking tokens are billed as output, so count them too.
+                usage_dict["output_tokens"] = (
+                    (getattr(response.usage_metadata, "candidates_token_count", 0) or 0)
+                    + (getattr(response.usage_metadata, "thoughts_token_count", 0) or 0)
+                )
 
             stop_reason = "end_turn"
             if tool_calls_output:

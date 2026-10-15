@@ -91,12 +91,40 @@ async def execute_tool(
         return {"status": "error", "message": f"Unknown tool: {tool_name}"}
 
 
+MEDIA_PROMPTS = {
+    "image": (
+        "Customer ne ye tasveer bheji hai. Isay ghaur se dekhein. Agar is mein koi product, "
+        "screenshot, receipt ya model number hai to usay pehchan kar uske mutabiq jawab dein. "
+        "Daam ya stock batane ke liye hamesha tools istemal karein."
+    ),
+    "sticker": "Customer ne sticker bheja hai. Mukhtasar, dostana jawab dein.",
+    "audio": (
+        "Customer ne voice note bheja hai. Usay sunein aur uska jawab dein. "
+        "Jawab usi zaban mein dein jis mein customer ne baat ki hai."
+    ),
+    "video": "Customer ne video bheji hai. Usay dekh kar uske mutabiq jawab dein.",
+    "document": "Customer ne document bheja hai. Usay parh kar uske mutabiq jawab dein.",
+}
+
+DEFAULT_MEDIA_PROMPT = "Customer ne ye file bheji hai. Isay dekh kar uske mutabiq jawab dein."
+
+
+def build_media_prompt(media: Dict[str, Any]) -> str:
+    """Caption if the customer wrote one, otherwise an instruction for that media kind."""
+    caption = (media.get("caption") or "").strip()
+    instruction = MEDIA_PROMPTS.get(media.get("kind"), DEFAULT_MEDIA_PROMPT)
+    if caption:
+        return f"{instruction}\n\nCustomer ka caption: {caption}"
+    return instruction
+
+
 async def run_agent(
     customer: Dict[str, Any],
     user_text: str,
     llm_client: Optional[LLMClient] = None,
     odoo_client: Optional[OdooClient] = None,
     wa_message_id: Optional[str] = None,
+    media: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Agent execution loop using Google Gemini:
@@ -147,6 +175,23 @@ async def run_agent(
     # If DB was not available or history was empty, include current user_text explicitly
     if not messages and user_text:
         messages.append({"role": "user", "content": user_text})
+
+    # History only holds a text placeholder for media, so replace the current
+    # turn with a multimodal message that carries the actual bytes.
+    if media and media.get("data"):
+        if messages and messages[-1].get("role") == "user":
+            messages.pop()
+        messages.append({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": build_media_prompt(media)},
+                {"type": "media", "mime_type": media.get("mime_type"), "data": media["data"]},
+            ],
+        })
+        logger.info(
+            "Attached %s media (%s, %d bytes) to the turn for customer %s",
+            media.get("kind"), media.get("mime_type"), len(media["data"]), phone,
+        )
 
     max_iterations = 5
     iteration = 0

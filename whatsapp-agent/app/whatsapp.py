@@ -126,6 +126,108 @@ async def mark_as_read(wa_message_id: str, timeout: int = 10) -> bool:
         return False
 
 
+# Media types Gemini can read directly. WhatsApp voice notes arrive as "audio".
+MEDIA_MESSAGE_TYPES = ("image", "audio", "voice", "video", "sticker", "document")
+
+# Gemini rejects inline data above ~20MB; stay well under the request limit.
+MAX_MEDIA_BYTES = 15 * 1024 * 1024
+
+SUPPORTED_MEDIA_MIME_PREFIXES = ("image/", "audio/", "video/")
+SUPPORTED_MEDIA_MIME_TYPES = ("application/pdf",)
+
+
+def normalize_mime_type(mime_type: str) -> str:
+    """Strip parameters such as '; codecs=opus' that Gemini does not accept."""
+    return (mime_type or "").split(";")[0].strip().lower()
+
+
+def is_supported_media_mime(mime_type: str) -> bool:
+    """Whether Gemini can read this media type inline."""
+    mime = normalize_mime_type(mime_type)
+    return mime.startswith(SUPPORTED_MEDIA_MIME_PREFIXES) or mime in SUPPORTED_MEDIA_MIME_TYPES
+
+
+def parse_media(payload: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    """
+    Extract media details from an incoming media message.
+    Returns {"kind", "media_id", "mime_type", "caption"} or None for non-media payloads.
+    """
+    try:
+        value = payload["entry"][0]["changes"][0].get("value", {})
+        messages = value.get("messages")
+        if not messages:
+            return None
+
+        msg = messages[0]
+        msg_type = msg.get("type", "")
+        if msg_type not in MEDIA_MESSAGE_TYPES:
+            return None
+
+        media = msg.get(msg_type) or {}
+        media_id = media.get("id", "")
+        if not media_id:
+            return None
+
+        return {
+            "kind": msg_type,
+            "media_id": media_id,
+            "mime_type": normalize_mime_type(media.get("mime_type", "")),
+            "caption": (media.get("caption") or "").strip(),
+        }
+    except (IndexError, KeyError, TypeError) as e:
+        logger.warning("Could not parse media from WhatsApp payload: %s", str(e))
+        return None
+
+
+async def download_media(media_id: str, timeout: int = 30) -> Optional[Tuple[bytes, str]]:
+    """
+    Download WhatsApp media in two steps: resolve the media id to a short-lived
+    URL, then fetch the bytes. Returns (data, mime_type) or None on failure.
+    """
+    token = settings.wa_token
+    if not token:
+        logger.warning("WA_TOKEN not set. Cannot download media %s.", media_id)
+        return None
+
+    headers = {"Authorization": f"Bearer {token}"}
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as http_client:
+            meta_res = await http_client.get(f"{GRAPH_API_URL}/{media_id}", headers=headers)
+            if meta_res.status_code >= 400:
+                logger.error("Could not resolve media %s. Status: %s, Body: %s", media_id, meta_res.status_code, meta_res.text)
+                return None
+
+            meta = meta_res.json()
+            url = meta.get("url")
+            mime_type = normalize_mime_type(meta.get("mime_type", ""))
+            file_size = int(meta.get("file_size") or 0)
+            if not url:
+                logger.error("Media %s has no download URL", media_id)
+                return None
+            if file_size and file_size > MAX_MEDIA_BYTES:
+                logger.warning("Media %s is too large (%d bytes). Skipping download.", media_id, file_size)
+                return None
+
+            # The CDN URL still requires the Graph API bearer token.
+            file_res = await http_client.get(url, headers=headers)
+            if file_res.status_code >= 400:
+                logger.error("Could not download media %s. Status: %s", media_id, file_res.status_code)
+                return None
+
+            data = file_res.content
+            if len(data) > MAX_MEDIA_BYTES:
+                logger.warning("Downloaded media %s is too large (%d bytes). Skipping.", media_id, len(data))
+                return None
+
+            mime_type = mime_type or normalize_mime_type(file_res.headers.get("content-type", ""))
+            logger.info("Downloaded media %s (%d bytes, %s)", media_id, len(data), mime_type)
+            return data, mime_type
+    except Exception as e:
+        logger.error("Error downloading media %s: %s", media_id, str(e))
+        return None
+
+
 def parse_incoming(payload: Dict[str, Any]) -> Optional[Tuple[str, str, str, str, str]]:
     """
     Parse Meta webhook payload.

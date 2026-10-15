@@ -6,6 +6,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY", description="Google Gemini API Key")
     gemini_model: str = Field(default="gemini-3.5-flash", alias="GEMINI_MODEL", description="Gemini model name")
+    gemini_thinking_budget: int = Field(
+        default=0,
+        alias="GEMINI_THINKING_BUDGET",
+        description="Thinking tokens Gemini may spend (0 = off, -1 = let the model decide). "
+                    "Thinking shares the max_output_tokens budget, so leaving it on can truncate replies.",
+    )
     llm_price_input: float = Field(default=0.075, description="Gemini price per 1M input tokens in USD")
     llm_price_output: float = Field(default=0.30, description="Gemini price per 1M output tokens in USD")
 
