@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from app.config import settings
 from app import db
-from app.handoff import notify_staff
+from app.handoff import notify_staff, notify_staff_by_email
 from app.llm import LLMClient, get_llm_client
 from app.odoo_client import OdooClient
 from app.prompts import build_system_prompt
@@ -34,6 +34,7 @@ async def execute_tool(
     customer: Dict[str, Any],
     tool_registry: ToolRegistry,
     recent_messages: List[Dict[str, str]],
+    channel: str = "whatsapp",
 ) -> Dict[str, Any]:
     """
     Execute a single tool call with:
@@ -85,6 +86,9 @@ async def execute_tool(
         except Exception:
             pass
         await notify_staff(customer, reason, recent_messages)
+        # On the email channel also alert staff by email, when configured.
+        if channel == "email":
+            await notify_staff_by_email(customer, reason, recent_messages)
         return await tool_registry.handoff_to_human(reason)
 
     else:
@@ -125,6 +129,8 @@ async def run_agent(
     odoo_client: Optional[OdooClient] = None,
     wa_message_id: Optional[str] = None,
     media: Optional[Dict[str, Any]] = None,
+    channel: str = "whatsapp",
+    message_id: Optional[str] = None,
 ) -> str:
     """
     Agent execution loop using Google Gemini:
@@ -140,7 +146,13 @@ async def run_agent(
     # Save user message to database if DB pool is available
     if user_text:
         try:
-            saved = await db.save_message(customer_id, "user", user_text, wa_message_id=wa_message_id)
+            saved = await db.save_message(
+                customer_id,
+                "user",
+                user_text,
+                wa_message_id=wa_message_id,
+                email_message_id=message_id if channel == "email" else None,
+            )
             if not saved:
                 logger.info("Message %s already processed. Skipping agent execution.", wa_message_id)
                 return ""
@@ -165,7 +177,7 @@ async def run_agent(
     active_llm = llm_client or get_llm_client()
 
     tool_registry = ToolRegistry(odoo_client=odoo_client)
-    system_prompt = build_system_prompt(settings.business_name)
+    system_prompt = build_system_prompt(settings.business_name, channel=channel)
 
     # Build initial message trajectory
     messages: List[Dict[str, Any]] = []
@@ -254,7 +266,7 @@ async def run_agent(
                 t_name = tc["name"]
                 t_args = tc.get("arguments", {})
 
-                res = await execute_tool(t_name, t_args, customer, tool_registry, history)
+                res = await execute_tool(t_name, t_args, customer, tool_registry, history, channel=channel)
                 if t_name == "handoff_to_human":
                     handoff_occurred = True
 

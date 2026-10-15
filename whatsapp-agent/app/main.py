@@ -18,7 +18,16 @@ from app.whatsapp import (
     mark_as_read,
     send_text,
 )
-from app.handoff import pause_bot_for_customer, resume_bot_for_customer
+from app.handoff import (
+    pause_bot_for_customer,
+    resume_bot_for_customer,
+    pause_bot_for_email,
+    resume_bot_for_email,
+)
+# Re-exported so both channels share one limiter (and existing imports keep working).
+from app.ratelimit import RATE_LIMIT_TRACKER, MAX_MESSAGES_PER_MINUTE, is_rate_limited
+from app.email_agent import process_incoming_email
+from app.email_client import verify_webhook_signature as verify_email_signature
 
 # settings.log_level was previously defined but never applied, so the app's own
 # INFO logs were swallowed by the root logger's default WARNING level.
@@ -28,25 +37,6 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
-
-# Simple in-memory rate limiting tracker: {phone: [timestamp1, timestamp2]}
-RATE_LIMIT_TRACKER: Dict[str, List[float]] = {}
-MAX_MESSAGES_PER_MINUTE = 20
-
-
-def is_rate_limited(phone: str) -> bool:
-    """Rate limit per phone number to prevent spam and cost spikes (max 20 msgs/min)."""
-    now = time.time()
-    timestamps = RATE_LIMIT_TRACKER.get(phone, [])
-    # Keep timestamps within the last 60 seconds
-    valid_timestamps = [ts for ts in timestamps if now - ts < 60]
-    RATE_LIMIT_TRACKER[phone] = valid_timestamps
-
-    if len(valid_timestamps) >= MAX_MESSAGES_PER_MINUTE:
-        return True
-
-    valid_timestamps.append(now)
-    return False
 
 
 @asynccontextmanager
@@ -73,7 +63,15 @@ app = FastAPI(
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "ok", "service": "whatsapp-ai-agent", "environment": settings.env}
+    return {
+        "status": "ok",
+        "service": "whatsapp-ai-agent",
+        "environment": settings.env,
+        "channels": {
+            "whatsapp": bool(settings.wa_token and settings.wa_phone_number_id),
+            "email": settings.email_agent_enabled,
+        },
+    }
 
 
 @app.get("/webhook")
@@ -207,6 +205,31 @@ async def webhook_handler(request: Request):
     )
 
 
+@app.post("/webhook/email")
+async def email_webhook_handler(request: Request):
+    """Resend inbound email webhook (POST). Returns 200 immediately."""
+    if not settings.email_agent_enabled:
+        raise HTTPException(status_code=404, detail="Email agent is disabled")
+
+    raw_body = await request.body()
+
+    # Resend signs inbound webhooks Svix-style.
+    if not verify_email_signature(raw_body, dict(request.headers)):
+        raise HTTPException(status_code=403, detail="Invalid signature")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    logger.info("Email webhook POST accepted (%d bytes)", len(raw_body))
+    return JSONResponse(
+        status_code=200,
+        content={"status": "received"},
+        background=BackgroundTask(process_incoming_email, payload),
+    )
+
+
 # --- Admin Endpoints ---
 
 def verify_admin_token(authorization: Optional[str] = Header(None)):
@@ -230,3 +253,15 @@ async def admin_resume_bot(phone: str):
     """Admin endpoint to resume bot for a customer."""
     res = await resume_bot_for_customer(phone)
     return res
+
+
+@app.post("/admin/email/pause/{email}", dependencies=[Depends(verify_admin_token)])
+async def admin_pause_bot_email(email: str):
+    """Admin endpoint to pause bot for an email customer."""
+    return await pause_bot_for_email(email)
+
+
+@app.post("/admin/email/resume/{email}", dependencies=[Depends(verify_admin_token)])
+async def admin_resume_bot_email(email: str):
+    """Admin endpoint to resume bot for an email customer."""
+    return await resume_bot_for_email(email)

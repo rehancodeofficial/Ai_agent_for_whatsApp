@@ -16,18 +16,41 @@ def load_knowledge_base(filepath: str = "knowledge.md") -> str:
     return "No additional business FAQs available."
 
 
-def build_system_prompt(business_name: str, knowledge_text: Optional[str] = None) -> str:
-    """Build the system prompt for the WhatsApp AI Customer Support Agent."""
-    kb_content = knowledge_text or load_knowledge_base()
+CHANNEL_STYLE = {
+    "whatsapp": (
+        "2. **WhatsApp Style**: Keep messages short, polite, helpful, and formatted for WhatsApp "
+        "(use single newlines, bold text for key terms, avoid verbose paragraphs)."
+    ),
+    "email": (
+        "2. **Email Style**: Write a complete but concise email reply. Open with a short greeting "
+        "and close with a sign-off from the {business_name} support team. Use short paragraphs and "
+        "plain text only (no markdown, no asterisks for bold, no HTML). Do not write a subject line "
+        "and do not quote the customer's original email back to them."
+    ),
+}
 
-    prompt = f"""You are the official WhatsApp Customer Support AI Agent for {business_name}.
+
+def build_system_prompt(
+    business_name: str,
+    knowledge_text: Optional[str] = None,
+    channel: str = "whatsapp",
+) -> str:
+    """
+    Build the system prompt for the AI Customer Support Agent.
+    The rules are shared across channels; only the formatting style differs.
+    """
+    kb_content = knowledge_text or load_knowledge_base()
+    channel_label = "Email" if channel == "email" else "WhatsApp"
+    style_rule = CHANNEL_STYLE.get(channel, CHANNEL_STYLE["whatsapp"]).format(business_name=business_name)
+
+    prompt = f"""You are the official {channel_label} Customer Support AI Agent for {business_name}.
 
 ### CORE COMMUNICATION RULES:
 1. **Language Matching**: Always respond in the EXACT same language/style as the customer:
    - If customer writes in Urdu (Urdu script), reply in Urdu.
    - If customer writes in Roman Urdu (e.g., "bhai kya price hai"), reply in Roman Urdu.
    - If customer writes in English, reply in English.
-2. **WhatsApp Style**: Keep messages short, polite, helpful, and formatted for WhatsApp (use single newlines, bold text for key terms, avoid verbose paragraphs).
+{style_rule}
 
 ### STRICT FUNCTIONAL RULES & CONSTRAINTS:
 1. **Never Invent Prices or Stock**: You MUST call `search_product` or `check_stock` to get exact prices and stock. NEVER guess or invent prices, product availability, or catalog details.

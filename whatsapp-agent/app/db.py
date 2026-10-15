@@ -40,14 +40,14 @@ async def get_or_create_customer(phone: str, name: Optional[str] = None, conn: O
     async def _execute(c: psycopg.AsyncConnection) -> Dict[str, Any]:
         async with c.cursor(row_factory=dict_row) as cur:
             await cur.execute(
-                "SELECT id, phone, name, odoo_partner_id, bot_active, created_at FROM customers WHERE phone = %s",
+                "SELECT id, phone, email, name, odoo_partner_id, bot_active, created_at FROM customers WHERE phone = %s",
                 (phone,),
             )
             customer = await cur.fetchone()
             if customer:
                 if name and not customer.get("name"):
                     await cur.execute(
-                        "UPDATE customers SET name = %s WHERE id = %s RETURNING id, phone, name, odoo_partner_id, bot_active, created_at",
+                        "UPDATE customers SET name = %s WHERE id = %s RETURNING id, phone, email, name, odoo_partner_id, bot_active, created_at",
                         (name, customer["id"]),
                     )
                     customer = await cur.fetchone()
@@ -57,7 +57,7 @@ async def get_or_create_customer(phone: str, name: Optional[str] = None, conn: O
                 """
                 INSERT INTO customers (phone, name, bot_active)
                 VALUES (%s, %s, TRUE)
-                RETURNING id, phone, name, odoo_partner_id, bot_active, created_at
+                RETURNING id, phone, email, name, odoo_partner_id, bot_active, created_at
                 """,
                 (phone, name),
             )
@@ -67,6 +67,49 @@ async def get_or_create_customer(phone: str, name: Optional[str] = None, conn: O
     if conn is not None:
         return await _execute(conn)
     
+    if pool is None:
+        raise RuntimeError("Database connection pool is not initialized")
+    async with pool.connection() as connection:
+        return await _execute(connection)
+
+
+async def get_or_create_customer_by_email(email: str, name: Optional[str] = None, conn: Optional[psycopg.AsyncConnection] = None) -> Dict[str, Any]:
+    """
+    Email-channel twin of get_or_create_customer: find a customer by email
+    address, or insert one. A customer may have a phone, an email, or both.
+    """
+    email = (email or "").strip().lower()
+
+    async def _execute(c: psycopg.AsyncConnection) -> Dict[str, Any]:
+        async with c.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                "SELECT id, phone, email, name, odoo_partner_id, bot_active, created_at FROM customers WHERE email = %s",
+                (email,),
+            )
+            customer = await cur.fetchone()
+            if customer:
+                if name and not customer.get("name"):
+                    await cur.execute(
+                        "UPDATE customers SET name = %s WHERE id = %s "
+                        "RETURNING id, phone, email, name, odoo_partner_id, bot_active, created_at",
+                        (name, customer["id"]),
+                    )
+                    customer = await cur.fetchone()
+                return customer
+
+            await cur.execute(
+                """
+                INSERT INTO customers (email, name, bot_active)
+                VALUES (%s, %s, TRUE)
+                RETURNING id, phone, email, name, odoo_partner_id, bot_active, created_at
+                """,
+                (email, name),
+            )
+            return await cur.fetchone()
+
+    if conn is not None:
+        return await _execute(conn)
+
     if pool is None:
         raise RuntimeError("Database connection pool is not initialized")
     async with pool.connection() as connection:
@@ -95,10 +138,12 @@ async def save_message(
     content: str,
     wa_message_id: Optional[str] = None,
     conn: Optional[psycopg.AsyncConnection] = None,
+    email_message_id: Optional[str] = None,
 ) -> bool:
     """
     Save a message to the database.
-    Returns False if wa_message_id is provided and already exists (duplicate webhook payload).
+    Returns False if a channel message id (WhatsApp or email) is provided and
+    already exists, which is how retried webhook deliveries are ignored.
     """
     async def _execute(c: psycopg.AsyncConnection) -> bool:
         async with c.cursor() as cur:
@@ -111,12 +156,21 @@ async def save_message(
                     logger.info("Duplicate wa_message_id detected: %s", wa_message_id)
                     return False
 
+            if email_message_id:
+                await cur.execute(
+                    "SELECT id FROM messages WHERE email_message_id = %s",
+                    (email_message_id,),
+                )
+                if await cur.fetchone():
+                    logger.info("Duplicate email_message_id detected: %s", email_message_id)
+                    return False
+
             await cur.execute(
                 """
-                INSERT INTO messages (customer_id, role, content, wa_message_id)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO messages (customer_id, role, content, wa_message_id, email_message_id)
+                VALUES (%s, %s, %s, %s, %s)
                 """,
-                (customer_id, role, content, wa_message_id),
+                (customer_id, role, content, wa_message_id, email_message_id),
             )
             return True
 

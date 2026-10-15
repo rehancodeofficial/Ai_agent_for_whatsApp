@@ -4,6 +4,7 @@ from app import db
 from app.config import settings
 from app.odoo_client import OdooClient
 from app.whatsapp import send_text
+from app.email_client import send_email
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,36 @@ async def notify_staff(
     return success
 
 
+async def notify_staff_by_email(
+    customer: Dict[str, Any],
+    reason: str,
+    recent_messages: List[Dict[str, str]],
+) -> bool:
+    """Email the staff alert address, when one is configured, for email-channel handoffs."""
+    staff_email = settings.staff_alert_email
+    if not staff_email:
+        return False
+
+    summary_lines = [
+        f"- {'Cust' if m.get('role') == 'user' else 'Bot'}: {m.get('content', '')[:80]}"
+        for m in recent_messages[-3:]
+    ]
+    summary_text = "\n".join(summary_lines) if summary_lines else "No recent messages."
+
+    body = (
+        "HUMAN HANDOFF ALERT\n\n"
+        f"Customer: {customer.get('name') or 'Valued Customer'}\n"
+        f"Email: {customer.get('email') or 'Unknown'}\n"
+        f"Phone: {customer.get('phone') or 'Not provided'}\n"
+        f"Reason: {reason}\n\n"
+        f"Recent conversation:\n{summary_text}\n\n"
+        "The bot has been paused for this customer. Please contact them directly."
+    )
+
+    logger.info("Emailing staff (%s) about handoff for %s", staff_email, customer.get("email"))
+    return await send_email(staff_email, "Human handoff required", body)
+
+
 async def pause_bot_for_customer(phone: str) -> Dict[str, Any]:
     """Admin helper: Pause bot for customer by phone number."""
     cust = await db.get_or_create_customer(phone)
@@ -78,3 +109,19 @@ async def resume_bot_for_customer(phone: str) -> Dict[str, Any]:
     await db.set_bot_active(cust["id"], True)
     logger.info("Admin resumed bot for customer %s", phone)
     return {"status": "success", "message": f"Bot resumed for customer {phone}"}
+
+
+async def pause_bot_for_email(email: str) -> Dict[str, Any]:
+    """Admin helper: Pause bot for a customer identified by email address."""
+    cust = await db.get_or_create_customer_by_email(email)
+    await db.set_bot_active(cust["id"], False)
+    logger.info("Admin paused bot for email customer %s", email)
+    return {"status": "success", "message": f"Bot paused for customer {email}"}
+
+
+async def resume_bot_for_email(email: str) -> Dict[str, Any]:
+    """Admin helper: Resume bot for a customer identified by email address."""
+    cust = await db.get_or_create_customer_by_email(email)
+    await db.set_bot_active(cust["id"], True)
+    logger.info("Admin resumed bot for email customer %s", email)
+    return {"status": "success", "message": f"Bot resumed for customer {email}"}

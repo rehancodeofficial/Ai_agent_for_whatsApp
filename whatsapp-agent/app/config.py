@@ -31,6 +31,23 @@ class Settings(BaseSettings):
     wa_app_secret: str = Field(default="", description="WhatsApp App Secret for X-Hub-Signature-256")
     staff_alert_phone: str = Field(default="+923000000000", description="Staff phone number for alerts")
 
+    # --- Resend email agent (shares the Gemini model, Odoo tools and DB with WhatsApp) ---
+    resend_api_key: str = Field(default="", description="Resend API key (re_...)")
+    resend_from_email: str = Field(
+        default="",
+        description="Verified sender, e.g. 'Al-Madina Store <support@yourdomain.com>'",
+    )
+    resend_reply_to: str = Field(default="", description="Optional Reply-To address for outgoing email")
+    resend_webhook_secret: str = Field(
+        default="",
+        description="Resend inbound webhook signing secret (whsec_...) for Svix verification",
+    )
+    email_agent_enabled: bool = Field(
+        default=False,
+        description="Enable the inbound email agent. Off by default so WhatsApp is unaffected.",
+    )
+    staff_alert_email: str = Field(default="", description="Staff email for handoff alerts on the email channel")
+
     admin_token: str = Field(default="admin_secret", description="Bearer token for admin API endpoints")
 
     business_name: str = Field(default="Al-Madina Mobile Store", description="Business name for prompt context")

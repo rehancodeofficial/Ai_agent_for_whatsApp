@@ -129,6 +129,51 @@ python scripts/seed_test_conversations.py
 
 ---
 
+## 📧 Email Agent (Resend)
+
+The email agent reuses the same Gemini model, system rules, Odoo tools, database and
+human-handoff switch as the WhatsApp agent. Only the delivery channel and the reply
+formatting differ.
+
+| | WhatsApp | Email |
+|---|---|---|
+| Inbound | `POST /webhook` (Meta, HMAC-SHA256) | `POST /webhook/email` (Resend, Svix) |
+| Outbound | Graph API | Resend API |
+| Identity | `customers.phone` | `customers.email` |
+| Pause bot | `POST /admin/pause/{phone}` | `POST /admin/email/pause/{email}` |
+
+### Setup
+
+1. Verify your sending domain in Resend and configure an inbound address.
+2. Create a webhook in Resend pointing at `https://<your-host>/webhook/email`, subscribed
+   to the **`email.received`** event, and copy its signing secret.
+3. Fill in `RESEND_API_KEY`, `RESEND_FROM_EMAIL` and `RESEND_WEBHOOK_SECRET` in `.env`,
+   then set `EMAIL_AGENT_ENABLED=true`.
+4. Apply the schema additions (idempotent, safe on an existing database):
+
+```bash
+psql "$DATABASE_URL" -f schema.sql
+```
+
+`GET /health` reports which channels are live:
+
+```json
+{"status": "ok", "channels": {"whatsapp": true, "email": true}}
+```
+
+While `EMAIL_AGENT_ENABLED` is false, `/webhook/email` returns 404 and nothing about the
+WhatsApp flow changes.
+
+### Behaviour
+
+- The `email.received` webhook carries metadata only, so the body is fetched from
+  `GET /emails/receiving/{id}` before the agent runs.
+- Quoted reply history is stripped and long mails are capped, to keep context and cost down.
+- Replies carry `In-Reply-To`/`References`, so they thread under the customer's message.
+- Out-of-office replies, bounces, newsletters and mail from the agent's own address are
+  never answered, which prevents mail loops.
+- Retried webhooks are deduplicated on the Resend email id.
+
 ## 🚢 Production Deployment Guide (Render / Railway)
 
 ### Deployment Steps:
