@@ -20,7 +20,7 @@ services:
       - key: LOG_LEVEL
         value: INFO
       - key: GEMINI_MODEL
-        value: gemini-2.5-flash
+        value: gemini-3.5-flash
       - key: BUSINESS_NAME
         value: Al-Madina Mobile Store
       - key: DATABASE_URL
