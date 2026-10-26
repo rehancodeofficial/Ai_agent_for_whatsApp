@@ -1,3 +1,10 @@
+databases:
+  - name: whatsapp-agent-db
+    databaseName: whatsapp_agent
+    user: postgres
+    plan: free
+    region: oregon
+
 services:
   - type: web
     name: whatsapp-ai-agent
@@ -10,11 +17,17 @@ services:
     envVars:
       - key: ENV
         value: production
+      - key: LOG_LEVEL
+        value: INFO
       - key: GEMINI_MODEL
-        value: gemini-2.0-flash
-      - key: GEMINI_API_KEY
-        sync: false
+        value: gemini-2.5-flash
+      - key: BUSINESS_NAME
+        value: Al-Madina Mobile Store
       - key: DATABASE_URL
+        fromDatabase:
+          name: whatsapp-agent-db
+          property: connectionString
+      - key: GEMINI_API_KEY
         sync: false
       - key: WA_TOKEN
         sync: false

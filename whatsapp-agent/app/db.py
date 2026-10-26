@@ -12,14 +12,53 @@ logger = logging.getLogger(__name__)
 pool: Optional[AsyncConnectionPool] = None
 
 
+# SQL Schema to auto-initialize on startup if not existing
+SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS customers (
+    id SERIAL PRIMARY KEY,
+    phone VARCHAR(30) UNIQUE NOT NULL,
+    name VARCHAR(255),
+    odoo_partner_id INT,
+    bot_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+    id SERIAL PRIMARY KEY,
+    customer_id INT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    role VARCHAR(20) NOT NULL,
+    content TEXT NOT NULL,
+    wa_message_id VARCHAR(255) UNIQUE,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_customer_created 
+ON messages (customer_id, created_at DESC);
+"""
+
+
+async def init_schema() -> None:
+    """Ensure database tables and indexes exist upon database connection."""
+    if pool is not None:
+        async with pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(SCHEMA_SQL)
+        logger.info("Database schema verified and initialized.")
+
+
 async def init_db_pool(conninfo: Optional[str] = None) -> AsyncConnectionPool:
     """Initialize the global psycopg AsyncConnectionPool."""
     global pool
     url = conninfo or settings.database_url
     if pool is None:
         logger.info("Initializing Postgres AsyncConnectionPool")
-        pool = AsyncConnectionPool(conninfo=url, open=False, min_size=1, max_size=10)
-        await pool.open()
+        pool = AsyncConnectionPool(conninfo=url, open=False, min_size=0, max_size=10, timeout=5.0)
+        await pool.open(wait=False)
+        try:
+            import asyncio
+            await asyncio.wait_for(init_schema(), timeout=2.0)
+        except Exception as e:
+            logger.warning("Database schema check deferred or skipped on startup: %s", str(e))
     return pool
 
 

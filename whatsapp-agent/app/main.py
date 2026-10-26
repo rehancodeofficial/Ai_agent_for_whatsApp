@@ -55,6 +55,20 @@ app = FastAPI(
 )
 
 
+@app.get("/")
+async def root():
+    """Root landing endpoint."""
+    return {
+        "status": "online",
+        "service": "whatsapp-ai-agent",
+        "environment": settings.env,
+        "endpoints": {
+            "health": "/health",
+            "webhook": "/webhook"
+        }
+    }
+
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
