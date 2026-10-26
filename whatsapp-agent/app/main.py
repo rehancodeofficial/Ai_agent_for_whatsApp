@@ -107,33 +107,54 @@ async def process_incoming_message(payload: Dict[str, Any]):
         await send_text(phone, "Aap bohot ziada messages bhej rahe hain. Bara-e-karam thora waqfa kijiye.")
         return
 
-    # 2. Get or create customer in DB
-    customer = await db.get_or_create_customer(phone, name)
+    # 2. Get or create customer in DB (with in-memory fallback if DB is unreachable)
+    try:
+        customer = await db.get_or_create_customer(phone, name)
+    except Exception as e:
+        logger.warning("DB failed in get_or_create_customer, using in-memory customer: %s", str(e))
+        customer = {"id": 1, "phone": phone, "name": name or "Customer", "bot_active": True}
+
     customer_id = customer["id"]
 
     # 3. Check if bot is active for this customer
-    if not await db.is_bot_active(customer_id):
-        logger.info("Bot is disabled for customer %s (%s). Message ignored.", customer_id, phone)
-        return
+    try:
+        if not await db.is_bot_active(customer_id):
+            logger.info("Bot is disabled for customer %s (%s). Message ignored.", customer_id, phone)
+            return
+    except Exception:
+        pass
 
     # 4. Handle non-text messages
     if msg_type != "text" and not (msg_type == "interactive" and text):
         logger.info("Received non-text message (%s) from %s", msg_type, phone)
-        await db.save_message(customer_id, "user", f"[{msg_type} message]", wa_message_id=wa_message_id)
+        try:
+            await db.save_message(customer_id, "user", f"[{msg_type} message]", wa_message_id=wa_message_id)
+        except Exception:
+            pass
         non_text_reply = (
             "Aap ka shukriya! Filhal hum sirf text messages process kar sakte hain. "
             "Bara-e-karam apna sawal text mein likh kar bhejiye."
         )
         await send_text(phone, non_text_reply)
-        await db.save_message(customer_id, "assistant", non_text_reply)
+        try:
+            await db.save_message(customer_id, "assistant", non_text_reply)
+        except Exception:
+            pass
         return
 
     # 5. Mark message as read
     if wa_message_id:
-        await mark_as_read(wa_message_id)
+        try:
+            await mark_as_read(wa_message_id)
+        except Exception as e:
+            logger.warning("Failed to mark message as read: %s", str(e))
 
-    # 6. Execute Claude AI Agent loop
-    reply = await run_agent(customer, text, wa_message_id=wa_message_id)
+    # 6. Execute Gemini AI Agent loop
+    try:
+        reply = await run_agent(customer, text, wa_message_id=wa_message_id)
+    except Exception as e:
+        logger.error("Error running agent: %s", str(e), exc_info=True)
+        reply = "Aapki darkhwast par amal ho raha hai. Hamari team jald aap se rabta karegi."
 
     # 7. Send reply back to user
     if reply:
