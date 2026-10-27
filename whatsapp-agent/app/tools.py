@@ -88,9 +88,26 @@ class ToolRegistry:
                 {"product_id": 109, "name": "Apple AirPods Pro (2nd Gen)", "price": 62000, "stock_quantity": 7, "code": "ACC-AIRPODS"},
             ]
             q_lower = query.lower().strip()
-            matches = [p for p in fallback_catalog if q_lower in p["name"].lower() or q_lower in p["code"].lower()]
-            if not matches and q_lower in ["mobile", "phone", "apple", "iphone", "samsung", "all", "price", "prices"]:
-                matches = fallback_catalog[:5]
+            # Split multi-word queries for partial matching
+            q_words = q_lower.split()
+            matches = []
+            for p in fallback_catalog:
+                p_name_lower = p["name"].lower()
+                p_code_lower = p["code"].lower()
+                # Match if any query word is in product name or code
+                if any(w in p_name_lower or w in p_code_lower for w in q_words):
+                    matches.append(p)
+
+            # Broad category keywords — return all products or top 6
+            broad_keywords = {
+                "mobile", "phone", "apple", "iphone", "samsung", "xiaomi", "redmi",
+                "all", "price", "prices", "list", "products", "catalog", "inventory",
+                # Roman Urdu common terms
+                "koi", "konsa", "konsi", "chahiye", "lena", "kharidna", "available",
+                "show", "batao", "dikhao", "sab", "tamam", "phon", "mobail",
+            }
+            if not matches and any(w in broad_keywords for w in q_words):
+                matches = fallback_catalog[:6]
             return {
                 "status": "success",
                 "count": len(matches),

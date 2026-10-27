@@ -139,14 +139,21 @@ async def run_agent(
     tool_registry = ToolRegistry(odoo_client=odoo_client)
     system_prompt = build_system_prompt(settings.business_name)
 
-    # Build initial message trajectory
+    # Build initial message trajectory from DB history
     messages: List[Dict[str, Any]] = []
     for msg in history:
         messages.append({"role": msg["role"], "content": msg["content"]})
 
-    # If DB was not available or history was empty, include current user_text explicitly
-    if not messages and user_text:
-        messages.append({"role": "user", "content": user_text})
+    # Always ensure the current user message is the last entry in the trajectory.
+    # If DB history already contains it as the last message, skip adding it again.
+    # If not (e.g., DB was unavailable, or history was empty), add it explicitly.
+    if user_text:
+        last_user_msg = next(
+            (m["content"] for m in reversed(messages) if m["role"] == "user"),
+            None,
+        )
+        if last_user_msg != user_text:
+            messages.append({"role": "user", "content": user_text})
 
     max_iterations = 5
     iteration = 0

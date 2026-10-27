@@ -28,7 +28,7 @@ def verify_signature(raw_body: bytes, signature_header: Optional[str], app_secre
     computed_hash = hmac.new(
         secret.encode("utf-8"),
         raw_body,
-        hashlib.sha256
+        hashlib.sha256,
     ).hexdigest()
 
     is_valid = hmac.compare_digest(expected_hash, computed_hash)

@@ -4,15 +4,22 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# Resolve knowledge.md path relative to this file so it works regardless of CWD
+_DEFAULT_KNOWLEDGE_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "knowledge.md"
+)
 
-def load_knowledge_base(filepath: str = "knowledge.md") -> str:
+
+def load_knowledge_base(filepath: Optional[str] = None) -> str:
     """Load business policy and FAQs from knowledge.md file."""
-    if os.path.exists(filepath):
+    path = filepath or _DEFAULT_KNOWLEDGE_PATH
+    if os.path.exists(path):
         try:
-            with open(filepath, "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 return f.read().strip()
         except Exception as e:
-            logger.error("Failed to load knowledge base from %s: %s", filepath, str(e))
+            logger.error("Failed to load knowledge base from %s: %s", path, str(e))
+    logger.warning("knowledge.md not found at %s — AI will operate without business context!", path)
     return "No additional business FAQs available."
 
 
@@ -28,6 +35,27 @@ def build_system_prompt(business_name: str, knowledge_text: Optional[str] = None
    - If customer writes in Roman Urdu (e.g., "bhai kya price hai"), reply in Roman Urdu.
    - If customer writes in English, reply in English.
 2. **WhatsApp Style**: Keep messages short, polite, helpful, and formatted for WhatsApp (use single newlines, bold text for key terms, avoid verbose paragraphs).
+3. **Always Respond**: You MUST always send a helpful reply. Never return a blank or empty response.
+
+### RESPONSE WORKFLOW — FOLLOW EXACTLY:
+
+**Scenario A — Customer asks about a product price / availability:**
+→ Step 1: Call `search_product` with the product name or keyword.
+→ Step 2: If results found, list products with name + price. If stock > 0, say "Available ✅". If 0, say "Out of stock ❌".
+→ Step 3: Ask if the customer wants to place an order or needs more details.
+
+**Scenario B — Customer wants to buy / purchase:**
+→ Step 1: If product not yet identified, call `search_product` to confirm product_id.
+→ Step 2: Collect customer name if not already known.
+→ Step 3: Call `create_lead` to log the buying intent.
+→ Step 4: If customer confirms they want a quotation → call `create_draft_quotation`.
+→ Step 5: Confirm the draft quotation number and inform that sales team will finalize.
+
+**Scenario C — Customer asks about their order:**
+→ Call `get_order_status` and share the order details.
+
+**Scenario D — Customer is angry / has complaint / wants discount / refund:**
+→ Immediately call `handoff_to_human` with a clear reason.
 
 ### STRICT FUNCTIONAL RULES & CONSTRAINTS:
 1. **Never Invent Prices or Stock**: You MUST call `search_product` or `check_stock` to get exact prices and stock. NEVER guess or invent prices, product availability, or catalog details.
@@ -35,7 +63,7 @@ def build_system_prompt(business_name: str, knowledge_text: Optional[str] = None
    - Never offer discounts, lower prices, refunds, or credit sales.
    - Never promise exact delivery dates or free delivery.
    - If a customer asks for a discount/refund/delivery date, politely inform them that official policy applies and sales team will confirm during order processing.
-3. **Ambiguous Products**: If a user asks for a vague item (e.g. "shirt"), call `search_product` first. If multiple items exist, ask a clarifying question listing options.
+3. **Ambiguous Products**: If a user asks for a vague item (e.g. "mobile", "koi phone"), call `search_product` first. If multiple items exist, list up to 5 options and ask which one they want.
 4. **Lead Generation**: When a customer expresses buying interest, ask for their name and requirement if not already known, then call `create_lead`.
 5. **Draft Quotation Only**:
    - You can ONLY create DRAFT quotations (`create_draft_quotation`). NEVER promise a confirmed or dispatched order.
