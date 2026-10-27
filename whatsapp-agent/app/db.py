@@ -188,7 +188,7 @@ async def get_recent_messages(
                     ORDER BY created_at DESC, id DESC
                     LIMIT %s
                 ) sub
-                ORDER BY created_at ASC, id ASC
+                ORDER BY sub.created_at ASC, sub.id ASC
                 """,
                 (customer_id, limit),
             )
