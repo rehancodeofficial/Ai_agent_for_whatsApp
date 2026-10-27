@@ -151,6 +151,12 @@ class GeminiLLMClient(LLMClient):
             gemini_tools = self._convert_tools(tools)
             contents = self._convert_messages(messages)
 
+            # Guard: Gemini API throws if contents list is empty
+            if not contents:
+                logger.error("Gemini chat called with empty contents list — returning fallback")
+                from app.llm.base import LLMResponse
+                return LLMResponse(text="", tool_calls=[], usage={"input_tokens": 0, "output_tokens": 0})
+
             config = types.GenerateContentConfig(
                 system_instruction=system if system else None,
                 tools=gemini_tools,
@@ -193,7 +199,13 @@ class GeminiLLMClient(LLMClient):
             if tool_calls_output:
                 stop_reason = "tool_use"
             elif response.candidates and getattr(response.candidates[0], "finish_reason", None):
-                stop_reason = str(response.candidates[0].finish_reason).lower()
+                raw_reason = str(response.candidates[0].finish_reason).lower()
+                stop_reason = raw_reason
+                if "max_tokens" in raw_reason or "length" in raw_reason:
+                    logger.warning("Gemini stopped due to MAX_TOKENS — consider increasing max_tokens")
+                elif "safety" in raw_reason or "recitation" in raw_reason:
+                    logger.warning("Gemini stopped due to SAFETY filter — response may be empty")
+                    text_output = text_output or ""
 
             return LLMResponse(
                 text=text_output,

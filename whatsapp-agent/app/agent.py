@@ -179,7 +179,7 @@ async def run_agent(
                         system=system_prompt,
                         messages=messages,
                         tools=TOOLS,
-                        max_tokens=500,
+                        max_tokens=1024,
                     ),
                     timeout=30.0,
                 )
