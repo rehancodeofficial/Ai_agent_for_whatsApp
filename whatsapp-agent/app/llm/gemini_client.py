@@ -154,7 +154,6 @@ class GeminiLLMClient(LLMClient):
             # Guard: Gemini API throws if contents list is empty
             if not contents:
                 logger.error("Gemini chat called with empty contents list — returning fallback")
-                from app.llm.base import LLMResponse
                 return LLMResponse(text="", tool_calls=[], usage={"input_tokens": 0, "output_tokens": 0})
 
             config = types.GenerateContentConfig(
